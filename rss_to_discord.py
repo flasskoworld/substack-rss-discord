@@ -132,15 +132,50 @@ def stable_id(title: str, link: str) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def feed_request(feed_url: str) -> urllib.request.Request:
+    return urllib.request.Request(
+        feed_url,
+        headers={
+            "Accept": "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.7",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/125.0.0.0 Safari/537.36"
+            ),
+        },
+    )
+
+
+def feed_url_candidates(feed_url: str) -> list[str]:
+    parsed_url = urllib.parse.urlparse(feed_url)
+    query = urllib.parse.parse_qsl(parsed_url.query, keep_blank_values=True)
+    query.append(("rss", "true"))
+    fallback = urllib.parse.urlunparse(parsed_url._replace(query=urllib.parse.urlencode(query)))
+    return [feed_url] if fallback == feed_url else [feed_url, fallback]
+
+
 def load_feed(feed_url: str) -> list[FeedItem]:
     parsed_url = urllib.parse.urlparse(feed_url)
     if parsed_url.scheme in ("", "file"):
         xml_bytes = Path(urllib.request.url2pathname(parsed_url.path or feed_url)).read_bytes()
     else:
-        request = urllib.request.Request(feed_url, headers={"User-Agent": "rss-to-discord/1.0"})
+        last_error: Exception | None = None
         try:
-            with urllib.request.urlopen(request, timeout=30, context=urlopen_context()) as response:
-                xml_bytes = response.read()
+            for candidate_url in feed_url_candidates(feed_url):
+                request = feed_request(candidate_url)
+                try:
+                    with urllib.request.urlopen(request, timeout=30, context=urlopen_context()) as response:
+                        xml_bytes = response.read()
+                    break
+                except urllib.error.HTTPError as error:
+                    last_error = error
+                    if error.code != 403:
+                        raise
+            else:
+                raise last_error or RuntimeError("Could not fetch feed.")
         except urllib.error.URLError as error:
             if isinstance(error.reason, ssl.SSLCertVerificationError):
                 raise RuntimeError(
