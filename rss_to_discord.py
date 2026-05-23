@@ -132,11 +132,11 @@ def stable_id(title: str, link: str) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
-def feed_request(feed_url: str) -> urllib.request.Request:
+def web_request(url: str, accept: str) -> urllib.request.Request:
     return urllib.request.Request(
-        feed_url,
+        url,
         headers={
-            "Accept": "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.7",
+            "Accept": accept,
             "Accept-Language": "en-US,en;q=0.9",
             "Cache-Control": "no-cache",
             "Pragma": "no-cache",
@@ -149,6 +149,10 @@ def feed_request(feed_url: str) -> urllib.request.Request:
     )
 
 
+def feed_request(feed_url: str) -> urllib.request.Request:
+    return web_request(feed_url, "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.7")
+
+
 def feed_url_candidates(feed_url: str) -> list[str]:
     parsed_url = urllib.parse.urlparse(feed_url)
     query = urllib.parse.parse_qsl(parsed_url.query, keep_blank_values=True)
@@ -157,33 +161,84 @@ def feed_url_candidates(feed_url: str) -> list[str]:
     return [feed_url] if fallback == feed_url else [feed_url, fallback]
 
 
+def archive_url_from_feed(feed_url: str) -> str:
+    parsed_url = urllib.parse.urlparse(feed_url)
+    return urllib.parse.urlunparse(
+        parsed_url._replace(
+            path="/api/v1/archive",
+            query=urllib.parse.urlencode({"sort": "new", "search": "", "offset": 0, "limit": 20}),
+            fragment="",
+        )
+    )
+
+
+def load_substack_archive(feed_url: str) -> list[FeedItem]:
+    archive_url = archive_url_from_feed(feed_url)
+    request = web_request(archive_url, "application/json, text/plain, */*")
+    try:
+        with urllib.request.urlopen(request, timeout=30, context=urlopen_context()) as response:
+            raw_posts = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace")[:500]
+        raise RuntimeError(f"Substack archive fallback failed: HTTP {error.code}: {detail}") from error
+
+    items: list[FeedItem] = []
+    for post in raw_posts:
+        title = post.get("title") or "New post"
+        link = post.get("canonical_url") or post.get("canonicalUrl") or ""
+        if not link and post.get("slug"):
+            parsed_url = urllib.parse.urlparse(feed_url)
+            link = urllib.parse.urlunparse(parsed_url._replace(path=f"/p/{post['slug']}", query="", fragment=""))
+        items.append(
+            FeedItem(
+                id=str(post.get("canonical_url") or post.get("id") or stable_id(title, link)),
+                title=title,
+                link=link,
+                summary=strip_html(post.get("subtitle") or post.get("description") or post.get("truncated_body_text") or ""),
+                image_url=post.get("cover_image") or "",
+                published_at=parse_date(post.get("post_date") or ""),
+            )
+        )
+    return items
+
+
 def load_feed(feed_url: str) -> list[FeedItem]:
     parsed_url = urllib.parse.urlparse(feed_url)
     if parsed_url.scheme in ("", "file"):
         xml_bytes = Path(urllib.request.url2pathname(parsed_url.path or feed_url)).read_bytes()
     else:
         last_error: Exception | None = None
-        try:
-            for candidate_url in feed_url_candidates(feed_url):
-                request = feed_request(candidate_url)
-                try:
-                    with urllib.request.urlopen(request, timeout=30, context=urlopen_context()) as response:
-                        xml_bytes = response.read()
-                    break
-                except urllib.error.HTTPError as error:
-                    last_error = error
-                    if error.code != 403:
-                        raise
-            else:
-                raise last_error or RuntimeError("Could not fetch feed.")
-        except urllib.error.URLError as error:
-            if isinstance(error.reason, ssl.SSLCertVerificationError):
+        for candidate_url in feed_url_candidates(feed_url):
+            request = feed_request(candidate_url)
+            try:
+                with urllib.request.urlopen(request, timeout=30, context=urlopen_context()) as response:
+                    xml_bytes = response.read()
+                break
+            except urllib.error.HTTPError as error:
+                detail = error.read().decode("utf-8", errors="replace")[:500]
+                print(f"RSS fetch failed for {candidate_url}: HTTP {error.code}: {detail}", file=sys.stderr)
+                last_error = error
+                if error.code != 403:
+                    raise RuntimeError(f"RSS fetch failed: HTTP {error.code}: {detail}") from error
+            except urllib.error.URLError as error:
+                if isinstance(error.reason, ssl.SSLCertVerificationError):
+                    raise RuntimeError(
+                        "Could not verify the feed site's SSL certificate. On macOS python.org installs, "
+                        "run the bundled 'Install Certificates.command', run this in GitHub Actions, "
+                        "or set ALLOW_INSECURE_SSL=1 for a local one-off test."
+                    ) from error
+                last_error = error
+        else:
+            if urllib.parse.urlparse(feed_url).netloc.endswith("substack.com"):
+                print("RSS feed failed. Trying Substack archive API fallback...", file=sys.stderr)
+                return load_substack_archive(feed_url)
+            if isinstance(last_error, urllib.error.URLError) and isinstance(last_error.reason, ssl.SSLCertVerificationError):
                 raise RuntimeError(
                     "Could not verify the feed site's SSL certificate. On macOS python.org installs, "
                     "run the bundled 'Install Certificates.command', run this in GitHub Actions, "
                     "or set ALLOW_INSECURE_SSL=1 for a local one-off test."
-                ) from error
-            raise
+                ) from last_error
+            raise last_error or RuntimeError("Could not fetch feed.")
 
     root = ET.fromstring(xml_bytes)
     namespaces = {
