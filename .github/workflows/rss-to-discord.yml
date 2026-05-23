@@ -39,10 +39,13 @@ jobs:
           DISCORD_WEBHOOK_URLS: ${{ secrets.DISCORD_WEBHOOK_URLS || secrets.DISCORD_WEBHOOK_URL }}
           RSS_STATE_PATH: .rss_state.json
           MAX_POSTS: "3"
+          ALLOW_INSECURE_SSL: "1"
         run: |
           if [ "${{ inputs.mark_existing }}" = "true" ]; then
+            echo "Marking existing RSS posts as seen..."
             python3 rss_to_discord.py --mark-existing
           else
+            echo "Checking RSS feed for new posts..."
             python3 rss_to_discord.py
           fi
 
