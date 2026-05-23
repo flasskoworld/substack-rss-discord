@@ -149,6 +149,17 @@ def web_request(url: str, accept: str) -> urllib.request.Request:
     )
 
 
+def jina_request(url: str) -> urllib.request.Request:
+    return urllib.request.Request(
+        f"https://r.jina.ai/http://r.jina.ai/http://{url}",
+        headers={
+            "Accept": "text/plain, */*",
+            "User-Agent": "rss-to-discord/1.0",
+            "X-No-Cache": "true",
+        },
+    )
+
+
 def feed_request(feed_url: str) -> urllib.request.Request:
     return web_request(feed_url, "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.7")
 
@@ -172,6 +183,13 @@ def archive_url_from_feed(feed_url: str) -> str:
     )
 
 
+def parse_jina_json_response(value: str) -> Any:
+    marker = "Markdown Content:"
+    if marker in value:
+        value = value.split(marker, 1)[1].strip()
+    return json.loads(value)
+
+
 def load_substack_archive(feed_url: str) -> list[FeedItem]:
     archive_url = archive_url_from_feed(feed_url)
     request = web_request(archive_url, "application/json, text/plain, */*")
@@ -180,8 +198,24 @@ def load_substack_archive(feed_url: str) -> list[FeedItem]:
             raw_posts = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")[:500]
-        raise RuntimeError(f"Substack archive fallback failed: HTTP {error.code}: {detail}") from error
+        print(f"Substack archive fallback failed: HTTP {error.code}: {detail}", file=sys.stderr)
+        print("Trying Jina Reader fallback...", file=sys.stderr)
+        raw_posts = load_substack_archive_via_jina(archive_url)
 
+    return feed_items_from_archive_posts(raw_posts, feed_url)
+
+
+def load_substack_archive_via_jina(archive_url: str) -> Any:
+    request = jina_request(archive_url)
+    try:
+        with urllib.request.urlopen(request, timeout=60, context=urlopen_context()) as response:
+            return parse_jina_json_response(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace")[:500]
+        raise RuntimeError(f"Jina Reader fallback failed: HTTP {error.code}: {detail}") from error
+
+
+def feed_items_from_archive_posts(raw_posts: list[dict[str, Any]], feed_url: str) -> list[FeedItem]:
     items: list[FeedItem] = []
     for post in raw_posts:
         title = post.get("title") or "New post"
