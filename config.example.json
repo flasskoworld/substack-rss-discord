@@ -1,0 +1,9 @@
+{
+  "feed_url": "https://streeteconomics.substack.com/feed",
+  "discord_webhook_urls": [
+    "https://discord.com/api/webhooks/REPLACE_ME/REPLACE_ME",
+    "https://discord.com/api/webhooks/OPTIONAL_SECOND_WEBHOOK/REPLACE_ME"
+  ],
+  "state_path": ".rss_state.json",
+  "max_posts": 3
+}

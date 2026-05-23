@@ -1,0 +1,47 @@
+name: RSS to Discord
+
+on:
+  workflow_dispatch:
+    inputs:
+      mark_existing:
+        description: "Mark current feed posts as seen without posting them"
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: "*/15 * * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Post new RSS items
+        env:
+          RSS_FEED_URL: https://streeteconomics.substack.com/feed
+          DISCORD_WEBHOOK_URLS: ${{ secrets.DISCORD_WEBHOOK_URLS || secrets.DISCORD_WEBHOOK_URL }}
+          RSS_STATE_PATH: .rss_state.json
+          MAX_POSTS: "3"
+        run: |
+          if [ "${{ inputs.mark_existing }}" = "true" ]; then
+            python3 rss_to_discord.py --mark-existing
+          else
+            python3 rss_to_discord.py
+          fi
+
+      - name: Save RSS state
+        run: |
+          if git diff --quiet .rss_state.json; then
+            echo "No state changes."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .rss_state.json
+            git commit -m "Update RSS state"
+            git push
+          fi
