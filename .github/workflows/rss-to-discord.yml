@@ -17,9 +17,21 @@ permissions:
 jobs:
   post:
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
+
+      - name: Check webhook secret
+        if: ${{ !inputs.mark_existing }}
+        env:
+          DISCORD_WEBHOOK_URLS: ${{ secrets.DISCORD_WEBHOOK_URLS || secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URLS" ]; then
+            echo "Missing DISCORD_WEBHOOK_URLS repository secret."
+            exit 1
+          fi
 
       - name: Post new RSS items
         env:
