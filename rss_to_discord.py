@@ -151,7 +151,7 @@ def web_request(url: str, accept: str) -> urllib.request.Request:
 
 def jina_request(url: str) -> urllib.request.Request:
     return urllib.request.Request(
-        f"https://r.jina.ai/http://r.jina.ai/http://{url}",
+        f"https://r.jina.ai/{url}",
         headers={
             "Accept": "text/plain, */*",
             "User-Agent": "rss-to-discord/1.0",
