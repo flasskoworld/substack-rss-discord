@@ -183,11 +183,50 @@ def archive_url_from_feed(feed_url: str) -> str:
     )
 
 
-def parse_jina_json_response(value: str) -> Any:
+def parse_jina_json_response(value: str) -> list[dict[str, Any]]:
+    """Accept an archive post list, never Jina metadata or a challenge page."""
     marker = "Markdown Content:"
     if marker in value:
         value = value.split(marker, 1)[1].strip()
-    return json.loads(value)
+
+    try:
+        decoded: Any = json.loads(value)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(
+            "Jina Reader did not return JSON archive posts. "
+            "Substack may be blocking the upstream request."
+        ) from error
+
+    # The Reader API can wrap fetched content in a response envelope.
+    for _ in range(4):
+        if isinstance(decoded, str):
+            try:
+                decoded = json.loads(decoded)
+            except json.JSONDecodeError as error:
+                raise RuntimeError(
+                    "Jina Reader returned text instead of a JSON archive post list."
+                ) from error
+        elif isinstance(decoded, dict):
+            if "data" in decoded:
+                decoded = decoded["data"]
+            elif "content" in decoded:
+                decoded = decoded["content"]
+            elif "posts" in decoded:
+                decoded = decoded["posts"]
+            else:
+                raise RuntimeError(
+                    "Jina Reader returned an object without an archive post list. "
+                    "The upstream Substack archive may be blocked."
+                )
+        else:
+            break
+
+    if not isinstance(decoded, list) or any(not isinstance(post, dict) for post in decoded):
+        raise RuntimeError(
+            "Jina Reader did not return a list of Substack posts; "
+            "not updating the RSS state to avoid losing articles."
+        )
+    return decoded
 
 
 def load_substack_archive(feed_url: str) -> list[FeedItem]:
